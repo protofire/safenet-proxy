@@ -1,3 +1,3 @@
-import { anvil, gnosis, sepolia } from "viem/chains";
+import { anvil, gnosis, mainnet, sepolia } from "viem/chains";
 
-export const supportedChains = [gnosis, sepolia, anvil];
+export const supportedChains = [mainnet, gnosis, sepolia, anvil];

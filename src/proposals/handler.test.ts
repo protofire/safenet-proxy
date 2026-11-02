@@ -18,6 +18,7 @@ vi.mock("../safe/service.js", () => ({ transactionDetails }));
 const SAFE_ADDRESS: Address = "0x1280C3d641ad0517918e0E4C41F4AD25f6b39144";
 const OTHER_SAFE_ADDRESS: Address = "0x9999999999999999999999999999999999999999";
 const SAFE_TX_HASH = "0x20e178f2ce590c235d30a6e99a78e799053f36bafe2d2022a642be03cb89058c";
+const TX_SERVICE_URL = "https://tx-sepolia.example.com";
 
 const SAFE_TX: SafeTransactionWithDomain = {
 	to: zeroAddress,
@@ -38,13 +39,14 @@ const BASE_ENV = {
 	PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
 	SAFE_API_KEY: "some_random_api_key",
 	RPC_URLS: JSON.stringify({ "11155111": "https://sepolia.example.com" }),
+	TX_SERVICE_URLS: JSON.stringify({ "11155111": TX_SERVICE_URL }),
 	CONSENSUS_CONFIGS: JSON.stringify({ "11155111": [{ address: zeroAddress }] }),
 	CHAIN_IDS: "11155111",
 };
 
-const event = (type: string, address: Address = SAFE_ADDRESS) => ({
+const event = (type: string, address: Address = SAFE_ADDRESS, chainId = "11155111") => ({
 	type,
-	chainId: "11155111",
+	chainId,
 	address,
 	safeTxHash: SAFE_TX_HASH,
 });
@@ -60,11 +62,16 @@ app.post("/sampled", (c) => handleProposal(c, true));
 app.post("/tx", (c) => handleTx(c));
 app.post("/tx-sampled", (c) => handleTx(c, true));
 
-async function post(path: string, body: string, env: Record<string, string> = {}): Promise<QueueMessage[]> {
+async function post(
+	path: string,
+	body: string,
+	env: Record<string, string> = {},
+	inheritBaseEnv = true,
+): Promise<QueueMessage[]> {
 	const sent: QueueMessage[] = [];
 	const pending: Promise<unknown>[] = [];
 	const bindings = {
-		...BASE_ENV,
+		...(inheritBaseEnv ? BASE_ENV : {}),
 		...env,
 		PROPOSAL_QUEUE: { send: async (message: QueueMessage) => sent.push(message) },
 	} as unknown as CloudflareBindings;
@@ -114,6 +121,31 @@ describe("handleProposal — webhook types", () => {
 
 	it("ignores unsupported webhook types", async () => {
 		const sent = await post("/propose", JSON.stringify(event("INCOMING_ETHER")));
+		expect(sent).toEqual([]);
+	});
+});
+
+describe("handleProposal — Transaction Service lookup", () => {
+	it("fetches the transaction from the Transaction Service configured for the event's chain", async () => {
+		await post("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION")));
+		expect(transactionDetails).toHaveBeenCalledWith(TX_SERVICE_URL, BASE_ENV.SAFE_API_KEY, 11155111n, SAFE_TX_HASH);
+	});
+
+	it("passes an undefined API key when none is configured", async () => {
+		const { SAFE_API_KEY, ...envWithoutApiKey } = BASE_ENV;
+		await post("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION")), envWithoutApiKey, false);
+		expect(transactionDetails).toHaveBeenCalledWith(TX_SERVICE_URL, undefined, 11155111n, SAFE_TX_HASH);
+	});
+
+	it("ignores events for chains without a configured Transaction Service", async () => {
+		const sent = await post("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION", SAFE_ADDRESS, "1")));
+		expect(transactionDetails).not.toHaveBeenCalled();
+		expect(sent).toEqual([]);
+	});
+
+	it("does not queue anything when the transaction cannot be fetched", async () => {
+		transactionDetails.mockResolvedValue(null);
+		const sent = await post("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION")));
 		expect(sent).toEqual([]);
 	});
 });

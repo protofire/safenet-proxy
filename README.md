@@ -16,8 +16,12 @@ The following secrets must be set before deployment. This can be done via the Cl
 echo "0xabc..." | npm exec -- wrangler secret put PRIVATE_KEY
 
 # JSON object mapping chain ID → RPC URL
-echo '{"11155111":"https://sepolia.infura.io/v3/...","100":"https://rpc.gnosischain.com"}' \
+echo '{"100":"https://rpc.gnosischain.com"}' \
   | npm exec -- wrangler secret put RPC_URLS
+
+# JSON object mapping chain ID → base URL of the Safe Transaction Service
+echo '{"1":"https://transaction-ethereum.safe.protofire.io","42161":"https://transaction-arbitrum.safe.protofire.io"}' \
+  | npm exec -- wrangler secret put TX_SERVICE_URLS
 
 # JSON object mapping chain ID → list of consensus configs (address + optional oracle).
 # Each safe transaction is proposed individually to every address in the list,

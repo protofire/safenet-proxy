@@ -25,8 +25,9 @@ export const relayingSafeConfigSchema = z.object({
 export const configSchema = z
 	.object({
 		PRIVATE_KEY: hexDataSchema,
-		SAFE_API_KEY: z.string(),
+		SAFE_API_KEY: z.string().optional(),
 		RPC_URLS: jsonStringToRecord(z.url()),
+		TX_SERVICE_URLS: jsonStringToRecord(z.url()),
 		CONSENSUS_CONFIGS: jsonStringToRecord(z.array(consensusConfigSchema).nonempty()),
 		RELAYING_SAFES: jsonStringToRecord(relayingSafeConfigSchema).default({}),
 		CHAIN_IDS: z.preprocess((val) => {

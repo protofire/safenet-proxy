@@ -96,7 +96,13 @@ async function processProposalAsync(
 	sampled: boolean,
 ): Promise<void> {
 	try {
-		const details = await transactionDetails(config.SAFE_API_KEY, event.chainId, event.safeTxHash);
+		const txServiceUrl = config.TX_SERVICE_URLS[String(event.chainId)];
+		if (txServiceUrl === undefined) {
+			console.info(`Ignoring event for chain ${event.chainId} without a configured Transaction Service`);
+			return;
+		}
+
+		const details = await transactionDetails(txServiceUrl, config.SAFE_API_KEY, event.chainId, event.safeTxHash);
 		if (details === null) {
 			return;
 		}

@@ -2,43 +2,32 @@ import type { Hex } from "viem";
 import { safeTransactionWithAccount } from "./schemas.js";
 import type { SafeTransactionWithDomain } from "./types.js";
 
-const SHORT_NAMES: Record<string, string> = {
-	"1": "eth",
-	"10": "oeth",
-	"56": "bnb",
-	"100": "gno",
-	"480": "wc",
-	"8453": "base",
-	"42161": "arb1",
+export const multisigTransactionUrl = (txServiceUrl: string, safeTxHash: Hex): string => {
+	const baseUrl = txServiceUrl.replace(/\/+$/, "");
+	return `${baseUrl}/api/v2/multisig-transactions/${safeTxHash}/`;
 };
 
+const authorizationHeaders = (apiKey: string | undefined): HeadersInit =>
+	apiKey === undefined ? {} : { Authorization: `Bearer ${apiKey}` };
+
 export const transactionDetails = async (
-	apiKey: string,
+	txServiceUrl: string,
+	apiKey: string | undefined,
 	chainId: bigint,
 	safeTxHash: Hex,
 ): Promise<SafeTransactionWithDomain | null> => {
-	const shortName = SHORT_NAMES[chainId.toString()];
-	if (shortName === undefined) {
-		console.error(`Unknown chain short name for eip155:${chainId}:${safeTxHash}`);
-		return null;
-	}
-	const response = await fetch(
-		`https://api.safe.global/tx-service/${shortName}/api/v2/multisig-transactions/${safeTxHash}/`,
-		{
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-			},
-		},
-	);
+	const response = await fetch(multisigTransactionUrl(txServiceUrl, safeTxHash), {
+		headers: authorizationHeaders(apiKey),
+	});
 	if (!response.ok) {
 		console.error(
-			`Could not fetch transaction defails for eip155:${chainId}:${safeTxHash} (status ${response.status})`,
+			`Could not fetch transaction details for eip155:${chainId}:${safeTxHash} (status ${response.status})`,
 		);
 		return null;
 	}
 	const parsed = safeTransactionWithAccount.safeParse(await response.json());
 	if (!parsed.success) {
-		console.error(`Could not parse transaction defails for eip155:${chainId}:${safeTxHash} (${parsed.error.message})`);
+		console.error(`Could not parse transaction details for eip155:${chainId}:${safeTxHash} (${parsed.error.message})`);
 		return null;
 	}
 	return {

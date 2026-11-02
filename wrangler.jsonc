@@ -8,17 +8,18 @@
 	// ],
 	// Secrets (set via `wrangler secret put`):
 	//   PRIVATE_KEY    — hex-encoded private key used to sign transactions on all chains
-	//   RPC_URLS       — JSON string mapping chain ID to RPC URL, e.g. {"11155111":"https://...","100":"https://..."}
-	//   SAFE_API_KEY   — API Key for the Safe API
+	//   RPC_URLS       — JSON string mapping chain ID to RPC URL, e.g. {"100":"https://..."}
+	//   SAFE_API_KEY   — optional API Key for the Safe Transaction Services
 	"vars": {
+		// Mapping of chain ID to the base URL of the Safe Transaction Service for that chain
+		"TX_SERVICE_URLS": {
+			"1": "https://transaction-ethereum.safe.protofire.io",
+			"42161": "https://transaction-arbitrum.safe.protofire.io"
+		},
 		// Mapping of chain ID to a list of consensus configs (address + optional oracle, + optional
 		// disableSampled to skip transactions received via the sampled endpoint)
 		"CONSENSUS_CONFIGS": {
 			"100": [
-				{
-					"address": "0x73b4BDc3112Dfb86085cDD84f26Ab908B20A4A84",
-					"oracle": "0xB83c4b66e752D947c1F55fd703b7937e21e401E4"
-				},
 				{
 					"address": "0xc855761D619f6002923507cE68B84d7689C2aa96",
 					"oracle": "0x4F61B8832978e83b80D69551AEf07557DBE41d03",
@@ -27,12 +28,7 @@
 			]
 		},
 		// Mapping of chain ID to a relaying Safe config ({safe, multiSend} addresses)
-		"RELAYING_SAFES": {
-			"100": {
-				"safe": "0xfDCb4233a28820bD0cB8A40f7C1DC1EC7A974eBA",
-  				"multiSend": "0x9641d764fc13c8B624c04430C7356C1C7C8102e2"
-			}
-		},
+		"RELAYING_SAFES": {},
 		// Comma-separated list of chain IDs to submit attestations to
 		"CHAIN_IDS": "100",
 		"SAMPLE_RATE": "100",

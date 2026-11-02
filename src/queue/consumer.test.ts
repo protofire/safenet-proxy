@@ -36,6 +36,7 @@ const ENV = {
 	PRIVATE_KEY: VALID_PRIVATE_KEY,
 	SAFE_API_KEY: TEST_API_KEY,
 	RPC_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
+	TX_SERVICE_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
 	CONSENSUS_CONFIGS: JSON.stringify({ [SEPOLIA_ID]: [{ address: zeroAddress }] }),
 	RELAYING_SAFES: JSON.stringify({ [SEPOLIA_ID]: RELAYING_SAFE_ENTRY }),
 	CHAIN_IDS: SEPOLIA_ID,
@@ -168,23 +169,24 @@ describe("handleQueueBatch", () => {
 		const viem = await import("viem");
 
 		const sepoliaSend = vi.fn().mockResolvedValue("0xsepolia");
-		const gnosisSend = vi.fn().mockResolvedValue("0xgnosis");
+		const mainnetSend = vi.fn().mockResolvedValue("0xmainnet");
 
 		// Return distinct wallet clients per call so we can track per-chain sends
 		(viem.createWalletClient as Mock)
 			.mockReturnValueOnce({ sendTransaction: sepoliaSend })
-			.mockReturnValueOnce({ sendTransaction: gnosisSend });
+			.mockReturnValueOnce({ sendTransaction: mainnetSend });
 
 		const multiChainEnv = {
 			PRIVATE_KEY: VALID_PRIVATE_KEY,
 			SAFE_API_KEY: TEST_API_KEY,
-			CHAIN_IDS: "11155111,100",
-			RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "100": "https://gnosis.example.com" }),
+			CHAIN_IDS: "11155111,1",
+			RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "1": "https://mainnet.example.com" }),
+			TX_SERVICE_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "1": "https://mainnet.example.com" }),
 			CONSENSUS_CONFIGS: JSON.stringify({
 				"11155111": [{ address: zeroAddress }],
-				"100": [{ address: zeroAddress }],
+				"1": [{ address: zeroAddress }],
 			}),
-			RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY, "100": RELAYING_SAFE_ENTRY }),
+			RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY, "1": RELAYING_SAFE_ENTRY }),
 			PROPOSAL_QUEUE: undefined as unknown,
 			SAMPLE_RATE: "0",
 		} as CloudflareBindings;
@@ -194,7 +196,7 @@ describe("handleQueueBatch", () => {
 
 		// Each chain should receive exactly one submission
 		expect(sepoliaSend).toHaveBeenCalledOnce();
-		expect(gnosisSend).toHaveBeenCalledOnce();
+		expect(mainnetSend).toHaveBeenCalledOnce();
 		expect(messages[0].ack).toHaveBeenCalledOnce();
 	});
 
@@ -217,6 +219,7 @@ describe("handleQueueBatch", () => {
 			SAFE_API_KEY: TEST_API_KEY,
 			CHAIN_IDS: SEPOLIA_ID,
 			RPC_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
+			TX_SERVICE_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
 			CONSENSUS_CONFIGS: JSON.stringify({ [SEPOLIA_ID]: [{ address: addr1 }, { address: addr2 }] }),
 			RELAYING_SAFES: JSON.stringify({}),
 			PROPOSAL_QUEUE: undefined as unknown,
@@ -254,6 +257,7 @@ describe("handleQueueBatch", () => {
 			SAFE_API_KEY: TEST_API_KEY,
 			CHAIN_IDS: SEPOLIA_ID,
 			RPC_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
+			TX_SERVICE_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
 			CONSENSUS_CONFIGS: JSON.stringify({ [SEPOLIA_ID]: [{ address: consensusAddr, oracle: oracleAddr }] }),
 			RELAYING_SAFES: JSON.stringify({}),
 			PROPOSAL_QUEUE: undefined as unknown,
@@ -285,6 +289,7 @@ describe("handleQueueBatch", () => {
 			SAFE_API_KEY: TEST_API_KEY,
 			CHAIN_IDS: SEPOLIA_ID,
 			RPC_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
+			TX_SERVICE_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
 			CONSENSUS_CONFIGS: JSON.stringify({
 				[SEPOLIA_ID]: [{ address: zeroAddress, oracle: zeroAddress }],
 			}),
@@ -309,6 +314,7 @@ describe("handleQueueBatch", () => {
 			SAFE_API_KEY: TEST_API_KEY,
 			CHAIN_IDS: SEPOLIA_ID,
 			RPC_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
+			TX_SERVICE_URLS: JSON.stringify({ [SEPOLIA_ID]: SEPOLIA_RPC }),
 			CONSENSUS_CONFIGS: JSON.stringify({
 				[SEPOLIA_ID]: [{ address: addr1 }, { address: addr2, oracle: oracleAddr }],
 			}),
@@ -381,11 +387,12 @@ describe("handleQueueBatch — relaying Safe routing", () => {
 		const mixedChainEnv = {
 			PRIVATE_KEY: VALID_PRIVATE_KEY,
 			SAFE_API_KEY: TEST_API_KEY,
-			CHAIN_IDS: "11155111,100",
-			RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "100": "https://gnosis.example.com" }),
+			CHAIN_IDS: "11155111,1",
+			RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "1": "https://mainnet.example.com" }),
+			TX_SERVICE_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "1": "https://mainnet.example.com" }),
 			CONSENSUS_CONFIGS: JSON.stringify({
 				"11155111": [{ address: zeroAddress }],
-				"100": [{ address: zeroAddress }],
+				"1": [{ address: zeroAddress }],
 			}),
 			// Only chain 11155111 has a relaying Safe configured.
 			RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY }),

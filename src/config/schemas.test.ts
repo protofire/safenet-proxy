@@ -4,6 +4,9 @@ import { configSchema } from "./schemas.js";
 const VALID_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const TEST_API_KEY = "some_random_api_key";
 const SEPOLIA_RPC = "https://sepolia.example.com";
+const MAINNET_RPC = "https://mainnet.example.com";
+const SEPOLIA_TX_SERVICE = "https://tx-sepolia.example.com";
+const MAINNET_TX_SERVICE = "https://tx-mainnet.example.com";
 // Checksummed zero address accepted by checkedAddressSchema
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const RELAYING_SAFE_ENTRY = { safe: ZERO_ADDRESS, multiSend: ZERO_ADDRESS };
@@ -12,8 +15,22 @@ const BASE_ENV = {
 	PRIVATE_KEY: VALID_PRIVATE_KEY,
 	SAFE_API_KEY: TEST_API_KEY,
 	RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC }),
+	TX_SERVICE_URLS: JSON.stringify({ "11155111": SEPOLIA_TX_SERVICE }),
 	CONSENSUS_CONFIGS: JSON.stringify({ "11155111": [{ address: ZERO_ADDRESS }] }),
 	RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY }),
+};
+
+const TWO_CHAIN_ENV = {
+	PRIVATE_KEY: VALID_PRIVATE_KEY,
+	SAFE_API_KEY: TEST_API_KEY,
+	CHAIN_IDS: "11155111,1",
+	RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "1": MAINNET_RPC }),
+	TX_SERVICE_URLS: JSON.stringify({ "11155111": SEPOLIA_TX_SERVICE, "1": MAINNET_TX_SERVICE }),
+	CONSENSUS_CONFIGS: JSON.stringify({
+		"11155111": [{ address: ZERO_ADDRESS }],
+		"1": [{ address: ZERO_ADDRESS }],
+	}),
+	RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY, "1": RELAYING_SAFE_ENTRY }),
 };
 
 describe("configSchema — CHAIN_IDS", () => {
@@ -28,18 +45,22 @@ describe("configSchema — CHAIN_IDS", () => {
 	});
 
 	it("parses multiple comma-separated chain IDs", () => {
-		const result = configSchema.parse({
-			PRIVATE_KEY: VALID_PRIVATE_KEY,
-			SAFE_API_KEY: TEST_API_KEY,
-			CHAIN_IDS: "11155111,100",
-			RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "100": SEPOLIA_RPC }),
+		const result = configSchema.parse(TWO_CHAIN_ENV);
+		expect(result.CHAIN_IDS).toEqual([11155111, 1]);
+	});
+
+	it("accepts Ethereum mainnet, Gnosis and Sepolia", () => {
+		const env = {
+			...BASE_ENV,
+			CHAIN_IDS: "1,100,11155111",
+			RPC_URLS: JSON.stringify({ "1": MAINNET_RPC, "100": MAINNET_RPC, "11155111": SEPOLIA_RPC }),
 			CONSENSUS_CONFIGS: JSON.stringify({
-				"11155111": [{ address: ZERO_ADDRESS }],
+				"1": [{ address: ZERO_ADDRESS }],
 				"100": [{ address: ZERO_ADDRESS }],
+				"11155111": [{ address: ZERO_ADDRESS }],
 			}),
-			RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY, "100": RELAYING_SAFE_ENTRY }),
-		});
-		expect(result.CHAIN_IDS).toEqual([11155111, 100]);
+		};
+		expect(configSchema.parse(env).CHAIN_IDS).toEqual([1, 100, 11155111]);
 	});
 
 	it("trims whitespace around IDs", () => {
@@ -152,34 +173,60 @@ describe("configSchema — CONSENSUS_CONFIGS", () => {
 	});
 });
 
+describe("configSchema — TX_SERVICE_URLS", () => {
+	it("parses a valid JSON string", () => {
+		const result = configSchema.parse(BASE_ENV);
+		expect(result.TX_SERVICE_URLS).toEqual({ "11155111": SEPOLIA_TX_SERVICE });
+	});
+
+	it("rejects non-URL values inside the record", () => {
+		expect(() =>
+			configSchema.parse({ ...BASE_ENV, TX_SERVICE_URLS: JSON.stringify({ "11155111": "not-a-url" }) }),
+		).toThrow();
+	});
+
+	it("rejects a missing TX_SERVICE_URLS", () => {
+		const { TX_SERVICE_URLS, ...envWithoutTxServices } = BASE_ENV;
+		expect(() => configSchema.parse(envWithoutTxServices)).toThrow();
+	});
+
+	it("is keyed by the Safes' chain and does not need to cover CHAIN_IDS", () => {
+		const result = configSchema.parse({ ...BASE_ENV, TX_SERVICE_URLS: JSON.stringify({ "1": MAINNET_TX_SERVICE }) });
+		expect(result.CHAIN_IDS).toEqual([11155111]);
+		expect(result.TX_SERVICE_URLS).toEqual({ "1": MAINNET_TX_SERVICE });
+	});
+});
+
+describe("configSchema — SAFE_API_KEY", () => {
+	it("is optional", () => {
+		const { SAFE_API_KEY, ...envWithoutApiKey } = BASE_ENV;
+		const result = configSchema.parse(envWithoutApiKey);
+		expect(result.SAFE_API_KEY).toBeUndefined();
+	});
+
+	it("is passed through when set", () => {
+		const result = configSchema.parse(BASE_ENV);
+		expect(result.SAFE_API_KEY).toBe(TEST_API_KEY);
+	});
+});
+
 describe("configSchema — cross-field validation", () => {
 	it("fails when RPC_URLS is missing an entry for a chain in CHAIN_IDS", () => {
 		expect(() =>
 			configSchema.parse({
-				PRIVATE_KEY: VALID_PRIVATE_KEY,
-				SAFE_API_KEY: TEST_API_KEY,
-				CHAIN_IDS: "11155111,100",
-				RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC }), // 100 missing
-				CONSENSUS_CONFIGS: JSON.stringify({
-					"11155111": [{ address: ZERO_ADDRESS }],
-					"100": [{ address: ZERO_ADDRESS }],
-				}),
-				RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY, "100": RELAYING_SAFE_ENTRY }),
+				...TWO_CHAIN_ENV,
+				RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC }), // 1 missing
 			}),
-		).toThrow(/RPC_URLS missing entry for chain 100/);
+		).toThrow(/RPC_URLS missing entry for chain 1/);
 	});
 
 	it("fails when CONSENSUS_CONFIGS is missing an entry for a chain in CHAIN_IDS", () => {
 		expect(() =>
 			configSchema.parse({
-				PRIVATE_KEY: VALID_PRIVATE_KEY,
-				SAFE_API_KEY: TEST_API_KEY,
-				CHAIN_IDS: "11155111,100",
-				RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "100": SEPOLIA_RPC }),
-				CONSENSUS_CONFIGS: JSON.stringify({ "11155111": [{ address: ZERO_ADDRESS }] }), // 100 missing
-				RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY, "100": RELAYING_SAFE_ENTRY }),
+				...TWO_CHAIN_ENV,
+				CONSENSUS_CONFIGS: JSON.stringify({ "11155111": [{ address: ZERO_ADDRESS }] }), // 1 missing
 			}),
-		).toThrow(/CONSENSUS_CONFIGS missing entry for chain 100/);
+		).toThrow(/CONSENSUS_CONFIGS missing entry for chain 1/);
 	});
 
 	it("accepts multiple consensus configs for a chain without multicall3 support", () => {
@@ -189,6 +236,7 @@ describe("configSchema — cross-field validation", () => {
 			SAFE_API_KEY: TEST_API_KEY,
 			CHAIN_IDS: "31337",
 			RPC_URLS: JSON.stringify({ "31337": SEPOLIA_RPC }),
+			TX_SERVICE_URLS: JSON.stringify({ "31337": SEPOLIA_TX_SERVICE }),
 			CONSENSUS_CONFIGS: JSON.stringify({ "31337": [{ address: ZERO_ADDRESS }, { address: ZERO_ADDRESS }] }),
 		});
 		expect(result.CONSENSUS_CONFIGS["31337"]).toHaveLength(2);
@@ -196,15 +244,8 @@ describe("configSchema — cross-field validation", () => {
 
 	it("succeeds when RELAYING_SAFES is missing an entry for a chain in CHAIN_IDS", () => {
 		const result = configSchema.parse({
-			PRIVATE_KEY: VALID_PRIVATE_KEY,
-			SAFE_API_KEY: TEST_API_KEY,
-			CHAIN_IDS: "11155111,100",
-			RPC_URLS: JSON.stringify({ "11155111": SEPOLIA_RPC, "100": SEPOLIA_RPC }),
-			CONSENSUS_CONFIGS: JSON.stringify({
-				"11155111": [{ address: ZERO_ADDRESS }],
-				"100": [{ address: ZERO_ADDRESS }],
-			}),
-			RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY }), // 100 missing — falls back to a direct call
+			...TWO_CHAIN_ENV,
+			RELAYING_SAFES: JSON.stringify({ "11155111": RELAYING_SAFE_ENTRY }), // 1 missing — falls back to a direct call
 		});
 		expect(result.RELAYING_SAFES).toEqual({ "11155111": RELAYING_SAFE_ENTRY });
 	});
