@@ -1,22 +1,25 @@
 import {
 	type Address,
 	BaseError,
+	type Chain,
 	createPublicClient,
 	createWalletClient,
 	encodeFunctionData,
 	extractChain,
 	type Hex,
 	http,
+	type PublicClient,
 	size,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { supportedChains } from "../config/chains.js";
 import { configSchema } from "../config/schemas.js";
-import type { ConsensusConfig, RelayingSafeConfig } from "../config/types.js";
+import type { Config, ConsensusConfig, RelayingSafeConfig } from "../config/types.js";
 import { encodeMultiSendCall, encodeMultiSendTransactions } from "../safe/multisend.js";
 import { encodeSafeRelayTransaction, type SafeRelayCall } from "../safe/relay.js";
 import type { SafeTransactionWithDomain } from "../safe/types.js";
 import { BETA_CONSENSUS_FUNCTIONS, CONSENSUS_FUNCTIONS } from "../utils/abis.js";
+import { assertCanPayGas, assertCanPayOracleFees } from "./funding.js";
 import { queueMessageSchema } from "./schemas.js";
 import type { QueueMessage } from "./types.js";
 
@@ -77,8 +80,7 @@ async function processChainMessages(
 
 	// Fetch EIP-1559 fee data once for the entire batch to avoid N redundant RPC calls
 	const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas();
-	// Double maxFeePerGas to guard against price movement during batch processing
-	const bufferedMaxFeePerGas = maxFeePerGas * 2n;
+	const bufferedMaxFeePerGas = bufferMaxFee(maxFeePerGas);
 
 	// Fetch the current nonce once and manually increment per transaction.
 	// Note: this could theoretically cause skipped transactions if a concurrent sender
@@ -86,17 +88,9 @@ async function processChainMessages(
 	// to getting stuck than viem's nonceManager since there is currently no retry logic.
 	const baseNonce = await publicClient.getTransactionCount({ address: account.address, blockTag: "latest" });
 
-	// One inner call per (message, consensus config) pair.
-	const innerCalls = transactions.flatMap((tx) =>
-		consensusConfigsFor(consensusConfigs, tx).map((config) => buildInnerCall(config, tx.data)),
-	);
-
-	const submissions =
-		relayingSafe !== undefined
-			? groupCallsByGasLimit(innerCalls, maxBatchGas).map((group) =>
-					encodeRelayedGroup(group, account.address, relayingSafe),
-				)
-			: innerCalls.map((call) => encodeDirectCall(call));
+	const plan = planSubmissions(consensusConfigs, relayingSafe, maxBatchGas, account.address, transactions);
+	await assertPlanFunded(publicClient, chain, account.address, relayingSafe, plan, bufferedMaxFeePerGas);
+	const { submissions } = plan;
 
 	const results = await Promise.allSettled(
 		submissions.map((submission, index) =>
@@ -121,6 +115,70 @@ async function processChainMessages(
 			console.error(`Error submitting tx ${index} to chain ${chainId}: ${errorMessage}`);
 		}
 	}
+}
+
+// Lets a request be rejected upfront instead of failing later in the queue. The batch
+// the message eventually lands in is re-checked before sending.
+export async function assertMessageAffordable(config: Config, message: QueueMessage): Promise<void> {
+	const account = privateKeyToAccount(config.PRIVATE_KEY);
+	await Promise.all(
+		config.CHAIN_IDS.map(async (chainId) => {
+			const chain = extractChain({ chains: supportedChains, id: chainId });
+			const publicClient = createPublicClient({ chain, transport: http(config.RPC_URLS[String(chainId)]) });
+			const relayingSafe = config.RELAYING_SAFES[String(chainId)];
+			const { maxFeePerGas } = await publicClient.estimateFeesPerGas();
+			const plan = planSubmissions(
+				config.CONSENSUS_CONFIGS[String(chainId)],
+				relayingSafe,
+				config.MAX_BATCH_GAS,
+				account.address,
+				[message],
+			);
+			await assertPlanFunded(publicClient, chain, account.address, relayingSafe, plan, bufferMaxFee(maxFeePerGas));
+		}),
+	);
+}
+
+// Doubles maxFeePerGas to guard against price movement while a batch is being processed.
+function bufferMaxFee(maxFeePerGas: bigint): bigint {
+	return maxFeePerGas * 2n;
+}
+
+type SubmissionPlan = { innerCalls: InnerCall[]; submissions: Submission[] };
+
+function planSubmissions(
+	consensusConfigs: ConsensusConfig[],
+	relayingSafe: RelayingSafeConfig | undefined,
+	maxBatchGas: bigint,
+	owner: Address,
+	transactions: QueueMessage[],
+): SubmissionPlan {
+	const innerCalls = transactions.flatMap((tx) =>
+		consensusConfigsFor(consensusConfigs, tx).map((config) => buildInnerCall(config, tx.data)),
+	);
+	const submissions =
+		relayingSafe !== undefined
+			? groupCallsByGasLimit(innerCalls, maxBatchGas).map((group) => encodeRelayedGroup(group, owner, relayingSafe))
+			: innerCalls.map((call) => encodeDirectCall(call));
+	return { innerCalls, submissions };
+}
+
+// Gas is always paid by the operator EOA; oracle fees are charged to whoever
+// proposes on-chain, which is the relaying Safe when one is configured.
+async function assertPlanFunded(
+	client: PublicClient,
+	chain: Chain,
+	sponsor: Address,
+	relayingSafe: RelayingSafeConfig | undefined,
+	plan: SubmissionPlan,
+	maxFeePerGas: bigint,
+): Promise<void> {
+	const proposer = relayingSafe?.safe ?? sponsor;
+	const oracles = plan.innerCalls.flatMap((call) => (call.oracle === undefined ? [] : [call.oracle]));
+	await Promise.all([
+		assertCanPayGas(client, chain, sponsor, plan.submissions, maxFeePerGas),
+		assertCanPayOracleFees(client, chain, proposer, oracles),
+	]);
 }
 
 // Consensus contracts that can opt out of sampled transactions, so that sampled
@@ -173,14 +231,15 @@ function encodeProposeCall(
 
 // A single proposeTransaction call, plus the gas its own on-chain execution requires
 // (excluding any wrapping/dispatch overhead, which is charged once per top-level submission).
-type InnerCall = SafeRelayCall & { executionGas: bigint };
+type InnerCall = SafeRelayCall & { executionGas: bigint; oracle?: Address };
+type Submission = { to: Address; data: Hex; gas: bigint };
 
 function buildInnerCall(config: ConsensusConfig, details: SafeTransactionWithDomain): InnerCall {
 	const { data, executionGas } = encodeProposeCall(config, details);
-	return { to: config.address, value: 0n, data, executionGas };
+	return { to: config.address, value: 0n, data, executionGas, oracle: config.oracle };
 }
 
-function encodeDirectCall(call: InnerCall): { to: Address; data: Hex; gas: bigint } {
+function encodeDirectCall(call: InnerCall): Submission {
 	return { to: call.to, data: call.data, gas: withGasBuffer(call.executionGas + calldataGas(call.data)) };
 }
 
@@ -219,11 +278,7 @@ function groupCallsByGasLimit(calls: InnerCall[], maxBatchGas: bigint): InnerCal
 // Wraps a group of one or more calls into a single execTransaction addressed to the
 // relaying Safe - a lone call is wrapped directly, while multiple calls are first
 // packed into one MultiSend delegatecall so they still land in a single execTransaction.
-function encodeRelayedGroup(
-	group: InnerCall[],
-	owner: Address,
-	relayingSafe: RelayingSafeConfig,
-): { to: Address; data: Hex; gas: bigint } {
+function encodeRelayedGroup(group: InnerCall[], owner: Address, relayingSafe: RelayingSafeConfig): Submission {
 	const executionGas = group.reduce((sum, call) => sum + call.executionGas, 0n);
 	const relayedCall: SafeRelayCall = group.length === 1 ? group[0] : encodeMultiSendCall(relayingSafe.multiSend, group);
 

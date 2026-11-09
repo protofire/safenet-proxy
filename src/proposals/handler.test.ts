@@ -3,15 +3,18 @@ import { type Address, zeroAddress } from "viem";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueueMessage } from "../queue/types.js";
 import type { SafeTransactionWithDomain } from "../safe/types.js";
+import { InsufficientBalanceError } from "../utils/errors.js";
 import { handleProposal, handleTx } from "./handler.js";
 
-const { enabledSafes, transactionDetails } = vi.hoisted(() => ({
+const { enabledSafes, transactionDetails, assertMessageAffordable } = vi.hoisted(() => ({
 	enabledSafes: [] as Address[],
 	transactionDetails: vi.fn(),
+	assertMessageAffordable: vi.fn(),
 }));
 
 vi.mock("../config/safes.js", () => ({ enabledSafes }));
 vi.mock("../safe/service.js", () => ({ transactionDetails }));
+vi.mock("../queue/consumer.js", () => ({ assertMessageAffordable }));
 
 // ---- fixtures ---------------------------------------------------------------
 
@@ -68,6 +71,17 @@ async function post(
 	env: Record<string, string> = {},
 	inheritBaseEnv = true,
 ): Promise<QueueMessage[]> {
+	const { response, sent } = await request(path, body, env, inheritBaseEnv);
+	expect(response.status).toBe(202);
+	return sent;
+}
+
+async function request(
+	path: string,
+	body: string,
+	env: Record<string, string> = {},
+	inheritBaseEnv = true,
+): Promise<{ response: Response; sent: QueueMessage[] }> {
 	const sent: QueueMessage[] = [];
 	const pending: Promise<unknown>[] = [];
 	const bindings = {
@@ -81,15 +95,16 @@ async function post(
 		props: {},
 	};
 	const response = await app.request(path, { method: "POST", body }, bindings, executionCtx);
-	expect(response.status).toBe(202);
 	await Promise.all(pending);
-	return sent;
+	return { response, sent };
 }
 
 beforeEach(() => {
 	enabledSafes.length = 0;
 	transactionDetails.mockReset();
 	transactionDetails.mockResolvedValue(SAFE_TX);
+	assertMessageAffordable.mockReset();
+	assertMessageAffordable.mockResolvedValue(undefined);
 });
 
 // ---- tests ------------------------------------------------------------------
@@ -137,15 +152,32 @@ describe("handleProposal — Transaction Service lookup", () => {
 		expect(transactionDetails).toHaveBeenCalledWith(TX_SERVICE_URL, undefined, 11155111n, SAFE_TX_HASH);
 	});
 
-	it("ignores events for chains without a configured Transaction Service", async () => {
-		const sent = await post("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION", SAFE_ADDRESS, "1")));
+	it("responds 422 and queues nothing for chains without a configured Transaction Service", async () => {
+		const { response, sent } = await request(
+			"/propose",
+			JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION", SAFE_ADDRESS, "1")),
+		);
+		expect(response.status).toBe(422);
 		expect(transactionDetails).not.toHaveBeenCalled();
 		expect(sent).toEqual([]);
 	});
 
-	it("does not queue anything when the transaction cannot be fetched", async () => {
+	it("responds 404 and queues nothing when the transaction cannot be fetched", async () => {
 		transactionDetails.mockResolvedValue(null);
-		const sent = await post("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION")));
+		const { response, sent } = await request("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION")));
+		expect(response.status).toBe(404);
+		expect(sent).toEqual([]);
+	});
+});
+
+describe("handleProposal — funding", () => {
+	it("responds 402 and queues nothing when the transaction cannot be paid for", async () => {
+		assertMessageAffordable.mockRejectedValue(new InsufficientBalanceError("sponsor is broke"));
+
+		const { response, sent } = await request("/propose", JSON.stringify(event("EXECUTED_MULTISIG_TRANSACTION")));
+
+		expect(response.status).toBe(402);
+		expect(await response.json()).toEqual({ success: false, message: "sponsor is broke" });
 		expect(sent).toEqual([]);
 	});
 });
@@ -216,6 +248,18 @@ describe("handleTx — enabled Safes", () => {
 		enabledSafes.push(OTHER_SAFE_ADDRESS);
 		const sent = await post("/tx", serializeTx(SAFE_TX));
 		expect(sent).toHaveLength(1);
+	});
+});
+
+describe("handleTx — funding", () => {
+	it("responds 402 and queues nothing when the transaction cannot be paid for", async () => {
+		assertMessageAffordable.mockRejectedValue(new InsufficientBalanceError("sponsor is broke"));
+
+		const { response, sent } = await request("/tx", serializeTx(SAFE_TX));
+
+		expect(response.status).toBe(402);
+		expect(await response.json()).toEqual({ success: false, message: "sponsor is broke" });
+		expect(sent).toEqual([]);
 	});
 });
 

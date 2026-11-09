@@ -1,11 +1,13 @@
 import { type Address, encodeFunctionData, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { configSchema } from "../config/schemas.js";
 import { encodeMultiSendCall } from "../safe/multisend.js";
 import { encodeSafeRelayTransaction } from "../safe/relay.js";
 import type { SafeTransactionWithDomain } from "../safe/types.js";
 import { BETA_CONSENSUS_FUNCTIONS, CONSENSUS_FUNCTIONS } from "../utils/abis.js";
-import { handleQueueBatch } from "./consumer.js";
+import { InsufficientBalanceError } from "../utils/errors.js";
+import { assertMessageAffordable, handleQueueBatch } from "./consumer.js";
 import type { QueueMessage } from "./types.js";
 
 // Partially mock viem: keep real utilities (BaseError, encodeFunctionData, etc.)
@@ -31,6 +33,10 @@ const SEPOLIA_ID = "11155111";
 const SAFE_ADDRESS: Address = "0x9999999999999999999999999999999999999999";
 const MULTI_SEND_ADDRESS: Address = "0x7777777777777777777777777777777777777777";
 const RELAYING_SAFE_ENTRY = { safe: SAFE_ADDRESS, multiSend: MULTI_SEND_ADDRESS };
+const ORACLE_ADDRESS: Address = "0x4444444444444444444444444444444444444444";
+const FEE_TOKEN_ADDRESS: Address = "0x5555555555555555555555555555555555555555";
+// 0.4 USDC (6 decimals)
+const ORACLE_FEE = 400_000n;
 
 const ENV = {
 	PRIVATE_KEY: VALID_PRIVATE_KEY,
@@ -100,6 +106,8 @@ function makeBatch(messages: Message<QueueMessage>[]): MessageBatch<QueueMessage
 let mockSendTransaction: Mock;
 let mockEstimateFeesPerGas: Mock;
 let mockGetTransactionCount: Mock;
+let mockGetBalance: Mock;
+let mockReadContract: Mock;
 
 beforeEach(async () => {
 	const viem = await import("viem");
@@ -110,10 +118,26 @@ beforeEach(async () => {
 		maxPriorityFeePerGas: 1_000_000n,
 	});
 	mockGetTransactionCount = vi.fn().mockResolvedValue(5);
+	mockGetBalance = vi.fn().mockResolvedValue(1_000_000_000_000_000_000_000n);
+	mockReadContract = vi.fn(async ({ functionName }: { functionName: string }) => {
+		switch (functionName) {
+			case "FEE_TOKEN":
+				return FEE_TOKEN_ADDRESS;
+			case "fee":
+				return ORACLE_FEE;
+			case "balanceOf":
+			case "allowance":
+				return 1_000_000_000n;
+			default:
+				throw new Error(`Unexpected readContract call: ${functionName}`);
+		}
+	});
 
 	(viem.createPublicClient as Mock).mockReturnValue({
 		estimateFeesPerGas: mockEstimateFeesPerGas,
 		getTransactionCount: mockGetTransactionCount,
+		getBalance: mockGetBalance,
+		readContract: mockReadContract,
 	});
 
 	(viem.createWalletClient as Mock).mockReturnValue({
@@ -519,5 +543,127 @@ describe("handleQueueBatch — consensus contracts disabled for sampled transact
 
 		expect(mockSendTransaction).not.toHaveBeenCalled();
 		expect(message.ack).toHaveBeenCalledOnce();
+	});
+});
+
+describe("handleQueueBatch — funding checks", () => {
+	const oracleEnv = {
+		...ENV_WITHOUT_RELAY,
+		CONSENSUS_CONFIGS: JSON.stringify({ [SEPOLIA_ID]: [{ address: zeroAddress, oracle: ORACLE_ADDRESS }] }),
+	} as CloudflareBindings;
+	const relayedOracleEnv = { ...oracleEnv, RELAYING_SAFES: JSON.stringify({ [SEPOLIA_ID]: RELAYING_SAFE_ENTRY }) };
+
+	function mockTokenBalances(balances: Record<Address, bigint>) {
+		const fallback = mockReadContract.getMockImplementation();
+		mockReadContract.mockImplementation(async (call: { functionName: string; args?: [Address] }) =>
+			call.functionName === "balanceOf" ? (balances[call.args?.[0] as Address] ?? 0n) : fallback?.(call),
+		);
+	}
+
+	let consoleError: ReturnType<typeof vi.spyOn>;
+	beforeEach(() => {
+		consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+	});
+	afterEach(() => {
+		consoleError.mockRestore();
+	});
+
+	it("fails the chain batch without sending anything when the sponsor cannot cover the gas", async () => {
+		mockGetBalance.mockResolvedValue(0n);
+
+		const messages = [makeMessage(), makeMessage()];
+		await handleQueueBatch(makeBatch(messages), ENV_WITHOUT_RELAY);
+
+		expect(mockSendTransaction).not.toHaveBeenCalled();
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining(`${OPERATOR} on chain ${SEPOLIA_ID} holds 0 ETH`),
+		);
+		for (const msg of messages) {
+			expect(msg.ack).toHaveBeenCalledOnce();
+		}
+	});
+
+	it("requires one oracle fee per proposal routed through the oracle, failing the batch otherwise", async () => {
+		const messages = [makeMessage(), makeMessage(), makeMessage()];
+
+		mockTokenBalances({ [OPERATOR]: ORACLE_FEE * 2n });
+		await handleQueueBatch(makeBatch(messages), oracleEnv);
+		expect(mockSendTransaction).not.toHaveBeenCalled();
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining(`${OPERATOR} on chain ${SEPOLIA_ID} holds 800000 of token ${FEE_TOKEN_ADDRESS}`),
+		);
+
+		mockTokenBalances({ [OPERATOR]: ORACLE_FEE * 3n });
+		await handleQueueBatch(makeBatch(messages), oracleEnv);
+		expect(mockSendTransaction).toHaveBeenCalledTimes(3);
+	});
+
+	it("requires the proposer to have approved the oracle fees to each oracle", async () => {
+		const fallback = mockReadContract.getMockImplementation();
+		mockReadContract.mockImplementation(async (call: { functionName: string; args?: [Address, Address] }) =>
+			call.functionName === "allowance" ? ORACLE_FEE * 2n : fallback?.(call),
+		);
+
+		const messages = [makeMessage(), makeMessage(), makeMessage()];
+		await handleQueueBatch(makeBatch(messages), oracleEnv);
+
+		expect(mockSendTransaction).not.toHaveBeenCalled();
+		expect(mockReadContract).toHaveBeenCalledWith(
+			expect.objectContaining({ functionName: "allowance", args: [OPERATOR, ORACLE_ADDRESS] }),
+		);
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining(`${OPERATOR} on chain ${SEPOLIA_ID} has approved 800000 of token ${FEE_TOKEN_ADDRESS}`),
+		);
+	});
+
+	it("reads each oracle's fee once per batch regardless of how many proposals it receives", async () => {
+		await handleQueueBatch(makeBatch([makeMessage(), makeMessage(), makeMessage()]), oracleEnv);
+
+		const readsOf = (functionName: string) =>
+			mockReadContract.mock.calls.filter(([call]) => call.functionName === functionName).length;
+		expect(readsOf("fee")).toBe(1);
+		expect(readsOf("FEE_TOKEN")).toBe(1);
+		expect(readsOf("allowance")).toBe(1);
+		expect(readsOf("balanceOf")).toBe(1);
+		expect(mockSendTransaction).toHaveBeenCalledTimes(3);
+	});
+
+	it("charges oracle fees to the relaying Safe rather than the sponsor when relaying", async () => {
+		mockTokenBalances({ [OPERATOR]: 0n, [SAFE_ADDRESS]: ORACLE_FEE });
+		await handleQueueBatch(makeBatch([makeMessage()]), relayedOracleEnv);
+		expect(mockSendTransaction).toHaveBeenCalledTimes(1);
+
+		mockSendTransaction.mockClear();
+		mockTokenBalances({ [OPERATOR]: ORACLE_FEE, [SAFE_ADDRESS]: 0n });
+		await handleQueueBatch(makeBatch([makeMessage()]), relayedOracleEnv);
+		expect(mockSendTransaction).not.toHaveBeenCalled();
+	});
+
+	it("rejects a single message upfront when its payers cannot cover it, without submitting", async () => {
+		mockTokenBalances({ [OPERATOR]: ORACLE_FEE - 1n });
+
+		await expect(assertMessageAffordable(configSchema.parse(oracleEnv), VALID_BODY)).rejects.toBeInstanceOf(
+			InsufficientBalanceError,
+		);
+		expect(mockSendTransaction).not.toHaveBeenCalled();
+	});
+
+	it("accepts a single message upfront when its payers can cover it", async () => {
+		await expect(assertMessageAffordable(configSchema.parse(oracleEnv), VALID_BODY)).resolves.toBeUndefined();
+	});
+
+	it("does not fail unfunded payers when there is nothing to submit", async () => {
+		mockGetBalance.mockResolvedValue(0n);
+		mockTokenBalances({});
+		const noSubmissionsEnv = {
+			...oracleEnv,
+			CONSENSUS_CONFIGS: JSON.stringify({
+				[SEPOLIA_ID]: [{ address: zeroAddress, oracle: ORACLE_ADDRESS, disableSampled: true }],
+			}),
+		} as CloudflareBindings;
+
+		await handleQueueBatch(makeBatch([makeMessage({ ...VALID_BODY, sampled: true })]), noSubmissionsEnv);
+
+		expect(consoleError).not.toHaveBeenCalled();
 	});
 });

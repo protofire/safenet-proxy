@@ -25,3 +25,14 @@ export const SAFE_RELAY_FUNCTIONS = parseAbi([
 // Safe's MultiSend library, used to batch multiple calls into a single `execTransaction`
 // by having the Safe `delegatecall` into it.
 export const MULTI_SEND_FUNCTIONS = parseAbi(["function multiSend(bytes memory transactions) public payable"]);
+
+// Subset of the Safenet oracle interface.
+export const ORACLE_FUNCTIONS = parseAbi([
+	"function fee() external view returns (uint96)",
+	"function FEE_TOKEN() external view returns (address)",
+]);
+
+export const ERC20_FUNCTIONS = parseAbi([
+	"function balanceOf(address account) external view returns (uint256)",
+	"function allowance(address owner, address spender) external view returns (uint256)",
+]);

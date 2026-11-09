@@ -3,6 +3,7 @@ import { type Address, isAddressEqual } from "viem";
 import { enabledSafes } from "../config/safes.js";
 import { configSchema } from "../config/schemas.js";
 import type { Config } from "../config/types.js";
+import { assertMessageAffordable } from "../queue/consumer.js";
 import type { QueueMessage } from "../queue/types.js";
 import { safeTransactionWithDomain, type TransactionEvent, transactionEventSchema } from "../safe/schemas.js";
 import { transactionDetails } from "../safe/service.js";
@@ -38,8 +39,34 @@ export const handleProposal = async (
 
 		console.info(`Handling ${request.data.type} for ${request.data.address}`);
 
-		// Fetch transaction details synchronously
-		c.executionCtx.waitUntil(processProposalAsync(config, c.env.PROPOSAL_QUEUE, request.data, sampled));
+		const txServiceUrl = config.TX_SERVICE_URLS[String(request.data.chainId)];
+		if (txServiceUrl === undefined) {
+			return c.json(
+				{ success: false, message: `No Transaction Service configured for chain ${request.data.chainId}` },
+				422,
+			);
+		}
+
+		// Resolved synchronously so the caller learns whether the transaction exists and can be paid for.
+		const details = await transactionDetails(
+			txServiceUrl,
+			config.SAFE_API_KEY,
+			request.data.chainId,
+			request.data.safeTxHash,
+		);
+		if (details === null) {
+			return c.json({ success: false, message: "Transaction not found" }, 404);
+		}
+
+		const message: QueueMessage = {
+			type: "TRANSACTION",
+			timestamp: Date.now(),
+			sampled,
+			data: details,
+		};
+
+		await assertMessageAffordable(config, message);
+		await c.env.PROPOSAL_QUEUE.send(message, { contentType: "v8" });
 
 		return c.body(null, 202);
 	} catch (e: unknown) {
@@ -72,6 +99,7 @@ export const handleTx = async (
 			data: request.data,
 		};
 
+		await assertMessageAffordable(config, message);
 		await c.env.PROPOSAL_QUEUE.send(message, { contentType: "v8" });
 
 		return c.body(null, 202);
@@ -87,36 +115,4 @@ function isWebhookTypeEnabled(config: Config, type: TransactionEvent["type"]): b
 
 function isSafeEnabled(safe: Address): boolean {
 	return enabledSafes.length === 0 || enabledSafes.some((enabledSafe) => isAddressEqual(enabledSafe, safe));
-}
-
-async function processProposalAsync(
-	config: Config,
-	queue: Queue<QueueMessage>,
-	event: TransactionEvent,
-	sampled: boolean,
-): Promise<void> {
-	try {
-		const txServiceUrl = config.TX_SERVICE_URLS[String(event.chainId)];
-		if (txServiceUrl === undefined) {
-			console.info(`Ignoring event for chain ${event.chainId} without a configured Transaction Service`);
-			return;
-		}
-
-		const details = await transactionDetails(txServiceUrl, config.SAFE_API_KEY, event.chainId, event.safeTxHash);
-		if (details === null) {
-			return;
-		}
-
-		// Queue the transaction
-		const message: QueueMessage = {
-			type: "TRANSACTION",
-			timestamp: Date.now(),
-			sampled,
-			data: details,
-		};
-
-		await queue.send(message, { contentType: "v8" });
-	} catch (error) {
-		console.error("Error processing proposal:", error);
-	}
 }
