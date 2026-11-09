@@ -7,7 +7,7 @@ export const multisigTransactionUrl = (txServiceUrl: string, safeTxHash: Hex): s
 	return `${baseUrl}/api/v2/multisig-transactions/${safeTxHash}/`;
 };
 
-const authorizationHeaders = (apiKey: string | undefined): HeadersInit =>
+const authorizationHeaders = (apiKey: string | undefined): Record<string, string> =>
 	apiKey === undefined ? {} : { Authorization: `Bearer ${apiKey}` };
 
 export const transactionDetails = async (

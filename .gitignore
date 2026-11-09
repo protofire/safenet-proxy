@@ -14,11 +14,11 @@ mobile/
 
 # deps
 node_modules/
-.wrangler
 
 # env
 .env
-.env.production
+.env.*
+!.env.example
 .dev.vars
 
 # logs

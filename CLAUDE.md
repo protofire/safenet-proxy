@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-Safenet Proxy is a Cloudflare Workers-based service that handles blockchain transaction proposals and multisig interactions. It provides endpoints for proposing and managing Safe multisig transactions across multiple blockchain networks.
+Safenet Proxy is a Node.js service that handles blockchain transaction proposals and multisig interactions. It provides endpoints for proposing and managing Safe multisig transactions across multiple blockchain networks, and is deployed as a container image to Kubernetes.
 
 **Tech Stack:**
-- Cloudflare Workers (Wrangler)
+- Node.js 22+ (served via `@hono/node-server`)
 - Hono (lightweight web framework)
 - TypeScript
 - Viem (Ethereum library)
@@ -15,13 +15,18 @@ Safenet Proxy is a Cloudflare Workers-based service that handles blockchain tran
 
 ```
 src/
-├── index.ts                 # Main Hono app entry point
+├── index.ts                 # Process entry point: config validation, queue, HTTP server, shutdown
+├── app.ts                   # Hono app and route definitions
 ├── config/                  # Configuration and chain definitions
 │   ├── chains.ts           # Supported blockchain networks
 │   ├── schemas.ts          # Zod validation schemas
 │   └── types.ts            # TypeScript type definitions
 ├── proposals/              # Transaction proposal handling
 │   └── handler.ts          # Proposal endpoints
+├── queue/                  # Batched submission of queued proposals
+│   ├── memory.ts           # In-process batching queue
+│   ├── consumer.ts         # Submits a batch of proposals on-chain
+│   └── funding.ts          # Payer balance/allowance checks
 ├── safe/                   # Safe multisig interactions
 │   ├── service.ts          # Safe contract interactions
 │   ├── schemas.ts          # Safe-specific schemas
@@ -40,14 +45,10 @@ src/
    ```
 
 2. **Environment variables:**
-   Required for local development and deployment:
+   Copy `.env.example` to `.env` and fill it in. All variables are documented in the README;
+   the required secrets are:
    - `PRIVATE_KEY`: Private key for transaction signing
-   - `RPC_URLS`: Ethereum RPC endpoint URL
-
-3. **Generate Cloudflare bindings types:**
-   ```sh
-   npm run cf-typegen
-   ```
+   - `RPC_URLS`: JSON mapping of chain ID to RPC URL
 
 ## Development Workflow
 
@@ -55,7 +56,7 @@ src/
 ```sh
 npm run dev
 ```
-Starts a local development server on `http://localhost:8787`
+Starts a local development server on `http://localhost:8787` with live reload, loading `.env` if present.
 
 ### Code Quality
 
@@ -71,17 +72,21 @@ npm run fix
 ```
 Automatically fixes Biome linting issues (formatting, imports, etc.)
 
-### Deployment
+### Build and Run
 
 ```sh
-npm run deploy
+npm run build   # compiles src/ to dist/ (tests excluded)
+npm start       # runs dist/index.js
 ```
-Deploys the application to Cloudflare Workers with minification enabled.
+
+### Deployment
+
+The service ships as a container image built from the `Dockerfile` and is deployed to Kubernetes by DevOps. Deployment-relevant behaviour (port, `/health` probe, single replica, 30s shutdown drain) is described in the README.
 
 Before deploying, ensure:
 - All checks pass: `npm run check`
-- Required secrets are set (PRIVATE_KEY, RPC_URL)
-- Code is committed to the repository
+- Tests pass: `npm test`
+- Required secrets are provided as environment variables (PRIVATE_KEY, RPC_URLS)
 
 ## Testing the Service
 
@@ -124,14 +129,16 @@ curl http://localhost:8787/propose \
 
 ### Security Considerations
 - Private keys should never be committed to the repository
-- All secrets must be set via Cloudflare dashboard or wrangler CLI
+- All secrets are provided as environment variables by the deployment; never hardcode them
 - Validate all external inputs with Zod schemas
 - Review smart contract interactions in `src/safe/service.ts`
 
 ## Important Files for Claude
 
-- **src/index.ts** - Main application entry point, route definitions
-- **wrangler.toml** - Cloudflare Workers configuration
+- **src/index.ts** - Process entry point (config validation, queue wiring, HTTP server, graceful shutdown)
+- **src/app.ts** - Route definitions
+- **src/queue/memory.ts** - In-process batching queue
+- **Dockerfile** - Container image definition
 - **package.json** - Dependencies and npm scripts
 - **tsconfig.json** - TypeScript configuration
 - **biome.json** - Linting and formatting configuration
@@ -141,7 +148,7 @@ curl http://localhost:8787/propose \
 ### Adding a New Endpoint
 1. Create a handler in the appropriate directory (e.g., `src/proposals/`)
 2. Define request/response schemas using Zod
-3. Register the route in `src/index.ts`
+3. Register the route in `src/app.ts`
 4. Add TypeScript types
 5. Test locally with `npm run dev`
 
@@ -191,16 +198,13 @@ Always use a name that makes the purpose of the branch immediately clear to anyo
 - Run `npm run check` to see type errors
 - Run `npm run fix` to auto-correct formatting
 
-**Deployment Issues:**
-- Verify secrets are set: `wrangler secret list`
-- Check wrangler version: `npm run deploy` uses `^4.4.0`
-
-**Type Generation:**
-- Run `npm run cf-typegen` after updating `wrangler.toml`
+**Startup Fails with a ZodError:**
+- The environment is validated on startup; the error lists the missing or malformed variable
+- Note that Node's `--env-file` parser mishandles indented comment lines in `.env`
 
 ## References
 
-- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
 - [Hono Documentation](https://hono.dev/)
+- [Hono Node.js adapter](https://github.com/honojs/node-server)
 - [Viem Documentation](https://viem.sh/)
 - [Zod Documentation](https://zod.dev/)

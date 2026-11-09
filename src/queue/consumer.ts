@@ -23,18 +23,18 @@ import { assertCanPayGas, assertCanPayOracleFees } from "./funding.js";
 import { queueMessageSchema } from "./schemas.js";
 import type { QueueMessage } from "./types.js";
 
-export async function handleQueueBatch(batch: MessageBatch<QueueMessage>, env: CloudflareBindings): Promise<void> {
+// Never throws: failures are logged and the affected messages are dropped (no retry policy).
+export async function handleQueueBatch(messages: unknown[], env: Record<string, unknown>): Promise<void> {
 	const config = configSchema.parse(env);
 	const account = privateKeyToAccount(config.PRIVATE_KEY);
 
-	// Parse all messages upfront; always ack everything at the end (no retry policy)
 	const transactions: QueueMessage[] = [];
-	for (const message of batch.messages) {
-		const parsed = queueMessageSchema.safeParse(message.body);
+	for (const [index, message] of messages.entries()) {
+		const parsed = queueMessageSchema.safeParse(message);
 		if (parsed.success) {
 			transactions.push(parsed.data);
 		} else {
-			console.error(`Failed to parse message ${message.id}: ${parsed.error.message}`);
+			console.error(`Failed to parse message ${index}: ${parsed.error.message}`);
 		}
 	}
 
@@ -58,10 +58,6 @@ export async function handleQueueBatch(batch: MessageBatch<QueueMessage>, env: C
 			const errorMessage = result.reason instanceof BaseError ? result.reason.shortMessage : String(result.reason);
 			console.error(`Chain ${config.CHAIN_IDS[i]} batch failed: ${errorMessage}`);
 		}
-	}
-
-	for (const message of batch.messages) {
-		message.ack();
 	}
 }
 

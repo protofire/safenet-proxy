@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { type Address, zeroAddress } from "viem";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppBindings } from "../config/types.js";
 import type { QueueMessage } from "../queue/types.js";
 import type { SafeTransactionWithDomain } from "../safe/types.js";
 import { InsufficientBalanceError } from "../utils/errors.js";
@@ -59,7 +60,7 @@ const serializeTx = (tx: SafeTransactionWithDomain) =>
 
 // ---- helpers ----------------------------------------------------------------
 
-const app = new Hono<{ Bindings: CloudflareBindings }>();
+const app = new Hono<{ Bindings: AppBindings }>();
 app.post("/propose", (c) => handleProposal(c));
 app.post("/sampled", (c) => handleProposal(c, true));
 app.post("/tx", (c) => handleTx(c));
@@ -83,19 +84,16 @@ async function request(
 	inheritBaseEnv = true,
 ): Promise<{ response: Response; sent: QueueMessage[] }> {
 	const sent: QueueMessage[] = [];
-	const pending: Promise<unknown>[] = [];
-	const bindings = {
+	const bindings: AppBindings = {
 		...(inheritBaseEnv ? BASE_ENV : {}),
 		...env,
-		PROPOSAL_QUEUE: { send: async (message: QueueMessage) => sent.push(message) },
-	} as unknown as CloudflareBindings;
-	const executionCtx = {
-		waitUntil: (promise: Promise<unknown>) => pending.push(promise),
-		passThroughOnException: () => {},
-		props: {},
+		PROPOSAL_QUEUE: {
+			send: async (message: QueueMessage) => {
+				sent.push(message);
+			},
+		},
 	};
-	const response = await app.request(path, { method: "POST", body }, bindings, executionCtx);
-	await Promise.all(pending);
+	const response = await app.request(path, { method: "POST", body }, bindings);
 	return { response, sent };
 }
 

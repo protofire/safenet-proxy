@@ -2,28 +2,28 @@
 	"name": "safenet-proxy",
 	"type": "module",
 	"private": true,
+	"engines": {
+		"node": ">=22.9"
+	},
 	"scripts": {
-		"dev": "wrangler dev",
-		"deploy": "wrangler deploy --minify",
-		"cf-typegen": "wrangler types --env-interface CloudflareBindings",
+		"dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
+		"build": "tsc -p tsconfig.build.json",
+		"start": "node dist/index.js",
 		"check": "biome check && tsc",
 		"fix": "biome check --write",
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"@biomejs/biome": "^2.3.10",
-		"dotenv": "^17.2.1",
+		"@hono/node-server": "^1.19.0",
 		"hono": "^4.8.5",
 		"viem": "^2.32.0",
 		"zod": "^4.0.5"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "^2.3.10",
 		"@types/node": "^24.1.0",
-		"esbuild": "^0.25.9",
-		"rimraf": "^6.0.1",
 		"tsx": "^4.20.3",
 		"typescript": "^5.8.3",
-		"vitest": "^4.0.18",
-		"wrangler": "^4.4.0"
+		"vitest": "^4.0.18"
 	}
 }

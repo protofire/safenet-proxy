@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { type Address, isAddressEqual } from "viem";
 import { enabledSafes } from "../config/safes.js";
 import { configSchema } from "../config/schemas.js";
-import type { Config } from "../config/types.js";
+import type { AppBindings, Config } from "../config/types.js";
 import { assertMessageAffordable } from "../queue/consumer.js";
 import type { QueueMessage } from "../queue/types.js";
 import { safeTransactionWithDomain, type TransactionEvent, transactionEventSchema } from "../safe/schemas.js";
@@ -11,7 +11,7 @@ import { handleError } from "../utils/errors.js";
 
 export const handleProposal = async (
 	c: Context<{
-		Bindings: CloudflareBindings;
+		Bindings: AppBindings;
 	}>,
 	sampled = false,
 ) => {
@@ -66,7 +66,7 @@ export const handleProposal = async (
 		};
 
 		await assertMessageAffordable(config, message);
-		await c.env.PROPOSAL_QUEUE.send(message, { contentType: "v8" });
+		await c.env.PROPOSAL_QUEUE.send(message);
 
 		return c.body(null, 202);
 	} catch (e: unknown) {
@@ -77,7 +77,7 @@ export const handleProposal = async (
 
 export const handleTx = async (
 	c: Context<{
-		Bindings: CloudflareBindings;
+		Bindings: AppBindings;
 	}>,
 	sampled = false,
 ) => {
@@ -100,7 +100,7 @@ export const handleTx = async (
 		};
 
 		await assertMessageAffordable(config, message);
-		await c.env.PROPOSAL_QUEUE.send(message, { contentType: "v8" });
+		await c.env.PROPOSAL_QUEUE.send(message);
 
 		return c.body(null, 202);
 	} catch (e: unknown) {

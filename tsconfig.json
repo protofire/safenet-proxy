@@ -4,16 +4,13 @@
 		"module": "NodeNext",
 		"moduleResolution": "NodeNext",
 		"esModuleInterop": true,
-		"experimentalDecorators": true,
-		"emitDecoratorMetadata": true,
 		"strict": true,
 		"skipLibCheck": true,
 		"lib": ["ESNext"],
-		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx",
-		"outDir": "./dist",
-		"types": ["@types/node", "./worker-configuration.d.ts"]
+		"types": ["node"],
+		"noEmit": true,
+		"outDir": "./dist"
 	},
-	"include": ["src/**/*.ts", "worker-configuration.d.ts"],
-	"exclude": ["node_modules"]
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules", "dist"]
 }

@@ -1,12 +1,11 @@
-# Ignore node_modules, as they are installed inside the container.
 node_modules
-
-# Ignore build output, if any.
 dist
-
-# Ignore local environment files.
+.git
+.github
+.devcontainer
+features
 .env*
-
-# Ignore Docker-related files.
+!.env.example
+*.md
 Dockerfile
 .dockerignore
