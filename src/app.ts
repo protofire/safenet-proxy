@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { handleCreateCheck, handleGetCheck, handleQuote } from "./checks/handler.js";
 import type { AppBindings } from "./config/types.js";
 import { handleProposal, handleTx } from "./proposals/handler.js";
 
@@ -20,3 +21,8 @@ app.post("/propose", async (c) => {
 app.post("/sampled", async (c) => {
 	return handleProposal(c, true);
 });
+
+// Phase 2 POC: user-paid Safenet checks.
+app.get("/v1/quote/:chainId", (c) => handleQuote(c));
+app.post("/v1/checks", (c) => handleCreateCheck(c));
+app.get("/v1/checks/:chainId/:safeTxHash", (c) => handleGetCheck(c));

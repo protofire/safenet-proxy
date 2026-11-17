@@ -125,6 +125,95 @@ curl http://localhost:8787/propose \
     -d '{"type":"EXECUTED_MULTISIG_TRANSACTION","chainId":"1","address":"0x1280C3d641ad0517918e0E4C41F4AD25f6b39144","safeTxHash":"0x20e178f2ce590c235d30a6e99a78e799053f36bafe2d2022a642be03cb89058c"}'
 ```
 
+## Phase 2 POC: user-paid checks
+
+Owners pay 0.5 USDC on the Safe's chain; only after that payment is confirmed does the proxy
+propose the transaction on Gnosis (paying the Safenet fee itself). POC scope: **Arbitrum One
+(42161) only**, fee hardcoded in `src/checks/config.ts`. Code lives in `src/checks/`.
+
+### Configuration
+
+Enabled only when `FEE_COLLECTOR` is set (otherwise `/v1/*` returns 500 and no worker runs).
+
+```sh
+FEE_COLLECTOR=0x...                     # Arbitrum address receiving the fee (EOA or Safe)
+CHECKS_DB_PATH=data/checks.sqlite       # SQLite job store (default shown; data/ is gitignored)
+RPC_URLS={"100":"https://rpc.gnosischain.com","42161":"https://arb1.arbitrum.io/rpc"}
+TX_SERVICE_URLS={"42161":"https://transaction-arbitrum.safe.protofire.io"}
+CONSENSUS_CONFIGS={"100":[{"address":"0xc855761D619f6002923507cE68B84d7689C2aa96","oracle":"0x4F61B8832978e83b80D69551AEf07557DBE41d03"}]}
+CHAIN_IDS=100
+RELAYING_SAFES={}                       # the POC expects PRIVATE_KEY's account to propose directly
+# scripts only
+OWNER_PRIVATE_KEY=0x...                 # Safe owner signing the USDC authorization
+PROXY_URL=http://localhost:8787
+```
+
+### Funding
+
+| Account | Chain | Needs |
+| --- | --- | --- |
+| `PRIVATE_KEY` (settler + proposer) | Arbitrum | ETH for `transferWithAuthorization` gas |
+| `PRIVATE_KEY` | Gnosis | xDAI for gas, the oracle fee token (USDC.e, `oracle.FEE_TOKEN()`) ≥ `oracle.fee()` per check |
+| `PRIVATE_KEY` | Gnosis | one-off `approve(oracle, max)` on the fee token. On startup the proxy logs the exact `cast send` command if the allowance is too low; it never approves by itself |
+| Owner wallet (wallet path) | Arbitrum | ≥ 0.5 USDC |
+| Safe (Safe path) | Arbitrum | ≥ 0.5 USDC, plus a pending tx to check |
+
+### Endpoints
+
+- `GET /v1/quote/42161` → `{ token, fee, feeCollector, chainId }`
+- `POST /v1/checks` `{ chainId, safe, safeTxHash, payment }` → `202 { id, status }`
+  - `400` invalid, `402` payer lacks USDC, `409` a check exists (body is that check), `422` target tx missing/executed
+- `GET /v1/checks/42161/:safeTxHash` → `{ id, status, paymentType, paymentTxHash, proposalTxHash, error }`
+
+Statuses: `PENDING_PAYMENT → PAID → PROPOSED`, or `EXPIRED` / `FAILED` (with `error`). An
+`EXPIRED` check, or a `FAILED` one that never took payment, can be requested again.
+
+A worker runs every 5s, one job at a time, and logs each transition as JSON
+(`{"event":"check_status","id":...,"from":...,"to":...,"txHash":...}`).
+
+### Wallet path (EIP-3009)
+
+1. The owner signs USDC `TransferWithAuthorization` to `FEE_COLLECTOR` with
+   `nonce = keccak256(abi.encode(chainId, safe, safeTxHash))`, valid for ≥ 10 minutes.
+2. `POST /v1/checks` with `payment = { type: "eip3009", authorization, signature }`.
+3. The worker calls `transferWithAuthorization` on Arbitrum (or picks up the tx of whoever settled
+   it first), checks the `Transfer` log → `PAID`, then proposes on Gnosis → `PROPOSED`. Unsettled
+   past `validBefore` → `EXPIRED`.
+
+Backend-only demo with the signing script (proxy must be running):
+
+```sh
+npm run dev
+# in another shell; prints the request body, --send also posts it
+OWNER_PRIVATE_KEY=0x... npm run sign-3009 -- <safe> <safeTxHash> --send
+curl http://localhost:8787/v1/checks/42161/<safeTxHash>
+```
+
+### Safe path
+
+1. The Safe proposes (and later executes) a separate tx `USDC.transfer(FEE_COLLECTOR, 0.5 USDC)`.
+   Without UI support, build it with:
+   ```sh
+   npm run build-safe-payment            # or: npm run build-safe-payment -- <feeCollector>
+   ```
+   and enter it in the Safe app's Transaction Builder (contract = USDC, method `transfer`).
+2. Register it once it has a `safeTxHash` (it does not need to be executed yet):
+   ```sh
+   curl http://localhost:8787/v1/checks -H 'content-type: application/json' \
+     -d '{"chainId":42161,"safe":"<safe>","safeTxHash":"<target safeTxHash>","payment":{"type":"safeTx","paymentSafeTxHash":"<payment safeTxHash>"}}'
+   ```
+3. The worker polls the Transaction Service. Once the payment is executed it requires, in the
+   Arbitrum receipt, the Safe's `ExecutionSuccess(paymentSafeTxHash)` and a USDC
+   `Transfer(safe → FEE_COLLECTOR, ≥ fee)` → `PAID` → `PROPOSED`. Not executed within 24h → `EXPIRED`.
+
+### POC limitations
+
+- One chain, hardcoded fee, no refunds (`FAILED` just records the error).
+- Gnosis proposals for checks are sent outside the batching queue from the same key; nonces come
+  from the pending block, but a queue batch sent at the very same moment could still collide.
+- If the proxy restarts while waiting for a Gnosis proposal receipt, that check may be proposed twice.
+- The SQLite file is local; in the container it needs a writable volume.
+
 ## Planning Epics
 
 When developing larger epics spanning over multiple PRs with an agent (for example a complex feature or big refactor), generate a plan to help guide the agent by outlining the separate phases in the development. It is recommended to use the `/plan-epic` feature from <https://github.com/safe-research/agents> for this.

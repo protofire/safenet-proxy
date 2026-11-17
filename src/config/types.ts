@@ -1,4 +1,5 @@
 import type z from "zod";
+import type { CheckStore } from "../checks/store.js";
 import type { ProposalQueue } from "../queue/types.js";
 import type { configSchema, consensusConfigSchema, relayingSafeConfigSchema } from "./schemas.js";
 
@@ -9,4 +10,6 @@ export type RelayingSafeConfig = z.infer<typeof relayingSafeConfigSchema>;
 export type AppBindings = {
 	[key: string]: unknown;
 	PROPOSAL_QUEUE: ProposalQueue;
+	// Only set when paid checks (Phase 2 POC) are enabled.
+	CHECKS_STORE?: CheckStore;
 };
