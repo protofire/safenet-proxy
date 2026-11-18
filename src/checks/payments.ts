@@ -1,6 +1,6 @@
 import { type Address, decodeFunctionData, type Hex, isAddressEqual, type Log, parseEventLogs } from "viem";
 import type { MultisigTransaction } from "../safe/types.js";
-import { SAFE_EVENTS, USDC_FUNCTIONS } from "../utils/abis.js";
+import { SAFE_EVENTS, SAFE_V141_EVENTS, USDC_FUNCTIONS } from "../utils/abis.js";
 import { CHECK_FEE, USDC_ADDRESS } from "./config.js";
 
 // Pure checks on payment transactions and receipts, kept free of I/O so they are easy to test.
@@ -18,9 +18,10 @@ export function hasUsdcTransfer(logs: Log[], { from, to, minValue }: TransferQue
 }
 
 export function hasExecutionSuccess(logs: Log[], safe: Address, safeTxHash: Hex): boolean {
-	return parseEventLogs({ abi: SAFE_EVENTS, eventName: "ExecutionSuccess", logs }).some(
-		(log) => isAddressEqual(log.address, safe) && log.args.txHash.toLowerCase() === safeTxHash.toLowerCase(),
-	);
+	return [
+		...parseEventLogs({ abi: SAFE_EVENTS, eventName: "ExecutionSuccess", logs }),
+		...parseEventLogs({ abi: SAFE_V141_EVENTS, eventName: "ExecutionSuccess", logs }),
+	].some((log) => isAddressEqual(log.address, safe) && log.args.txHash.toLowerCase() === safeTxHash.toLowerCase());
 }
 
 // Returns why a Safe transaction is not a valid fee payment, or undefined if it is one.

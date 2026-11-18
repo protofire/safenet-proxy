@@ -1,6 +1,6 @@
 import { type Address, encodeAbiParameters, encodeEventTopics, encodeFunctionData, type Hex, type Log } from "viem";
 import { describe, expect, it } from "vitest";
-import { SAFE_EVENTS, USDC_FUNCTIONS } from "../utils/abis.js";
+import { SAFE_EVENTS, SAFE_V141_EVENTS, USDC_FUNCTIONS } from "../utils/abis.js";
 import { CHECK_FEE, USDC_ADDRESS } from "./config.js";
 import { decodeUsdcTransfer, hasExecutionSuccess, hasUsdcTransfer } from "./payments.js";
 
@@ -24,6 +24,13 @@ const executionSuccessLog = (safe: Address, txHash: Hex) =>
 		safe,
 		encodeEventTopics({ abi: SAFE_EVENTS, eventName: "ExecutionSuccess" }) as Hex[],
 		encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [txHash, 0n]),
+	);
+
+const executionSuccessV141Log = (safe: Address, txHash: Hex) =>
+	log(
+		safe,
+		encodeEventTopics({ abi: SAFE_V141_EVENTS, eventName: "ExecutionSuccess", args: { txHash } }) as Hex[],
+		encodeAbiParameters([{ type: "uint256" }], [0n]),
 	);
 
 const query = { from: SAFE, to: FEE_COLLECTOR, minValue: CHECK_FEE };
@@ -51,6 +58,15 @@ describe("hasUsdcTransfer", () => {
 describe("hasExecutionSuccess", () => {
 	it("finds the Safe's ExecutionSuccess for the transaction", () => {
 		expect(hasExecutionSuccess([executionSuccessLog(SAFE, SAFE_TX_HASH)], SAFE, SAFE_TX_HASH)).toBe(true);
+	});
+
+	it("finds the ExecutionSuccess of a Safe v1.4.1, which indexes txHash", () => {
+		expect(hasExecutionSuccess([executionSuccessV141Log(SAFE, SAFE_TX_HASH)], SAFE, SAFE_TX_HASH)).toBe(true);
+	});
+
+	it("ignores a v1.4.1 event for another transaction", () => {
+		const otherHash: Hex = `0x${"11".repeat(32)}`;
+		expect(hasExecutionSuccess([executionSuccessV141Log(SAFE, otherHash)], SAFE, SAFE_TX_HASH)).toBe(false);
 	});
 
 	it("ignores events from another contract", () => {

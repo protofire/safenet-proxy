@@ -49,4 +49,6 @@ export const USDC_FUNCTIONS = parseAbi([
 	"event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
 ]);
 
+// Safe v1.3.0 logs txHash in the data; v1.4.1 indexes it. Same topic, different layout.
 export const SAFE_EVENTS = parseAbi(["event ExecutionSuccess(bytes32 txHash, uint256 payment)"]);
+export const SAFE_V141_EVENTS = parseAbi(["event ExecutionSuccess(bytes32 indexed txHash, uint256 payment)"]);
