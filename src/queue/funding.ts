@@ -66,7 +66,7 @@ export async function assertCanPayOracleFees(
 	);
 }
 
-async function readOracleFee(client: PublicClient, oracle: Address): Promise<{ token: Address; fee: bigint }> {
+export async function readOracleFee(client: PublicClient, oracle: Address): Promise<{ token: Address; fee: bigint }> {
 	const [token, fee] = await Promise.all([
 		client.readContract({ address: oracle, abi: ORACLE_FUNCTIONS, functionName: "FEE_TOKEN" }),
 		client.readContract({ address: oracle, abi: ORACLE_FUNCTIONS, functionName: "fee" }),
@@ -80,4 +80,27 @@ function countOccurrences<T>(items: T[]): Map<T, bigint> {
 		counts.set(item, (counts.get(item) ?? 0n) + 1n);
 	}
 	return counts;
+}
+
+export type OracleAllowanceShortfall = { oracle: Address; token: Address; fee: bigint; allowance: bigint };
+
+// Oracles whose fee the proposer has not approved for at least one proposal.
+export async function findOracleAllowanceShortfalls(
+	client: PublicClient,
+	proposer: Address,
+	oracles: Address[],
+): Promise<OracleAllowanceShortfall[]> {
+	const results = await Promise.all(
+		[...new Set(oracles)].map(async (oracle) => {
+			const { token, fee } = await readOracleFee(client, oracle);
+			const allowance = await client.readContract({
+				address: token,
+				abi: ERC20_FUNCTIONS,
+				functionName: "allowance",
+				args: [proposer, oracle],
+			});
+			return { oracle, token, fee, allowance };
+		}),
+	);
+	return results.filter((result) => result.allowance < result.fee);
 }

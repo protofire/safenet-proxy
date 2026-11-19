@@ -135,6 +135,56 @@ export async function assertMessageAffordable(config: Config, message: QueueMess
 	);
 }
 
+// Proposes a single transaction right away, outside the batching queue, using the same
+// planning and funding checks. Waits for every submission to be mined and returns their
+// hashes; throws if any of them fails. Used by paid checks, which track the proposal hash.
+// Nonces come from the pending block, but a queue batch sent at the same moment could still collide.
+export async function proposeNow(config: Config, details: SafeTransactionWithDomain): Promise<Hex[]> {
+	const account = privateKeyToAccount(config.PRIVATE_KEY);
+	const message: QueueMessage = { type: "TRANSACTION", timestamp: Date.now(), sampled: false, data: details };
+	const hashes: Hex[] = [];
+	for (const chainId of config.CHAIN_IDS) {
+		const chain = extractChain({ chains: supportedChains, id: chainId });
+		const rpcUrl = config.RPC_URLS[String(chainId)];
+		const walletClient = createWalletClient({ chain, account, transport: http(rpcUrl) });
+		const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+		const relayingSafe = config.RELAYING_SAFES[String(chainId)];
+
+		const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas();
+		const bufferedMaxFeePerGas = bufferMaxFee(maxFeePerGas);
+		const plan = planSubmissions(
+			config.CONSENSUS_CONFIGS[String(chainId)],
+			relayingSafe,
+			config.MAX_BATCH_GAS,
+			account.address,
+			[message],
+		);
+		await assertPlanFunded(publicClient, chain, account.address, relayingSafe, plan, bufferedMaxFeePerGas);
+
+		const nonce = await publicClient.getTransactionCount({ address: account.address, blockTag: "pending" });
+		for (const [index, submission] of plan.submissions.entries()) {
+			const hash = await submitTransaction(
+				walletClient,
+				chain,
+				account,
+				submission.to,
+				submission.data,
+				submission.gas,
+				bufferedMaxFeePerGas,
+				maxPriorityFeePerGas,
+				nonce + index,
+				chainId,
+			);
+			const receipt = await publicClient.waitForTransactionReceipt({ hash });
+			if (receipt.status !== "success") {
+				throw new Error(`Proposal transaction ${hash} reverted on chain ${chainId}`);
+			}
+			hashes.push(hash);
+		}
+	}
+	return hashes;
+}
+
 // Doubles maxFeePerGas to guard against price movement while a batch is being processed.
 function bufferMaxFee(maxFeePerGas: bigint): bigint {
 	return maxFeePerGas * 2n;
@@ -294,7 +344,7 @@ async function submitTransaction(
 	maxPriorityFeePerGas: bigint,
 	nonce: number,
 	chainId: number,
-): Promise<void> {
+): Promise<Hex> {
 	const transactionHash = await client.sendTransaction({
 		chain,
 		account,
@@ -306,4 +356,5 @@ async function submitTransaction(
 		nonce,
 	});
 	console.info(`Transaction submitted to chain ${chainId}: ${transactionHash} (nonce: ${nonce})`);
+	return transactionHash;
 }

@@ -35,3 +35,10 @@ export const safeTransactionWithAccount = safeTransactionSchema.extend({
 export const safeTransactionWithDomain = safeTransactionWithAccount.extend({
 	chainId: bigintStringSchema,
 });
+
+// A Transaction Service multisig transaction, including its execution status.
+export const multisigTransactionSchema = safeTransactionWithAccount.extend({
+	isExecuted: z.boolean(),
+	isSuccessful: z.boolean().nullable(),
+	transactionHash: hexDataSchema.nullable(),
+});

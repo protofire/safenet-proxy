@@ -31,4 +31,5 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # misc
+data/
 .DS_Store

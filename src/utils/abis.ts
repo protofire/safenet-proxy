@@ -36,3 +36,19 @@ export const ERC20_FUNCTIONS = parseAbi([
 	"function balanceOf(address account) external view returns (uint256)",
 	"function allowance(address owner, address spender) external view returns (uint256)",
 ]);
+
+// Subset of Circle's FiatToken (USDC) interface, including EIP-3009.
+export const USDC_FUNCTIONS = parseAbi([
+	"function name() external view returns (string)",
+	"function version() external view returns (string)",
+	"function balanceOf(address account) external view returns (uint256)",
+	"function authorizationState(address authorizer, bytes32 nonce) external view returns (bool)",
+	"function transfer(address to, uint256 value) external returns (bool)",
+	"function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s) external",
+	"event Transfer(address indexed from, address indexed to, uint256 value)",
+	"event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
+]);
+
+// Safe v1.3.0 logs txHash in the data; v1.4.1 indexes it. Same topic, different layout.
+export const SAFE_EVENTS = parseAbi(["event ExecutionSuccess(bytes32 txHash, uint256 payment)"]);
+export const SAFE_V141_EVENTS = parseAbi(["event ExecutionSuccess(bytes32 indexed txHash, uint256 payment)"]);
