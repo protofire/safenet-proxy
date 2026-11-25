@@ -43,6 +43,9 @@ RPC_URLS={"100":"https://rpc.gnosischain.com"}
 
 # Optional API key for the Safe Transaction Services
 SAFE_API_KEY=
+
+# Optional bearer token for /tx, /propose, /sampled. Without it, they close when FEE_COLLECTOR is set.
+PROPOSAL_AUTH_TOKEN=
 ```
 
 Non-secret settings:
@@ -91,6 +94,9 @@ PORT=8787
 - `POST /sampled` — same as `/propose`, but only for enabled Safes and subject to `SAMPLE_RATE`.
 - `POST /tx` — queues a fully specified Safe transaction directly.
 - `GET /health` — liveness/readiness probe, returns `{"status":"ok"}`.
+
+`/tx`, `/propose`, `/sampled` need `Authorization: Bearer $PROPOSAL_AUTH_TOKEN` when a token is set
+or paid checks are on (else `401`). Webhooks must send the token.
 
 Accepted proposals are collected in an in-process queue and submitted in batches (up to 10
 proposals or 5 seconds, whichever comes first). Batches are processed one at a time.
